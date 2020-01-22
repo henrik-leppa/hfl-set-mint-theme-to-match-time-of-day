@@ -1,0 +1,141 @@
+#! /bin/sh
+
+set -e
+
+version_message="\
+HFL Set Mint Theme To Match Time Of Day 1.0.0
+
+Copyright © 2020 Henrik Franciscus Leppä (HFL)
+"
+help_message="\
+Sets the Mint theme based on the current time of day.
+
+Usage: hfl-set-mint-theme-to-match-time-of-day
+   or: hfl-set-mint-theme-to-match-time-of-day --continuous [ <at_queue>=s ]
+   or: hfl-set-mint-theme-to-match-time-of-day (--help | -H | -h | -?)
+   or: hfl-set-mint-theme-to-match-time-of-day (--version | -V | -v)
+
+Options:
+  --continuous
+      Sets up a recursive \`at\` job that runs the command when the time of day
+      changes. \`<at_queue>\` specifies which \`at\` queue to use; if not given,
+      defaults to 's'. This queue needs to be used exclusively for this script.
+  --help, -H, -h, -?
+      Print this help message.
+  --version, -V, -v
+      Print version and copyright information.
+
+Notes:
+- To make this program run continuously from startup, add it to the \"Startup
+  Applications\" with the \`--continuous\` flag and a delay shorter than the
+  delay of any application with visual elements, such as windows or tray icons.
+- Theme does not update to some applications and system utilities without
+  restarting the program or logging out and logging back in.
+- When run in continuous mode, this script logs output and errors to:
+  \`~/hfl-set-mint-theme-to-match-time-of-day.log\`.
+- This script use \`at\` instead of \`cron\` because \`gsettings\` does not work
+  with \`cron\`.
+"
+
+# [See sysexits.h](https://www.freebsd.org/cgi/man.cgi?query=sysexits&sektion=3)
+ex_usage=64
+ex_oserr=71
+
+day_controls_theme="Mint-Y"
+night_controls_theme="Mint-Y-Dark"
+day_window_theme="Mint-Y"
+night_window_theme="Mint-Y-Dark"
+day_cursor_theme="DMZ-White"
+night_cursor_theme="DMZ-Black"
+day_desktop_theme="Mint-Y"
+night_desktop_theme="Mint-Y-Dark"
+day_start_hour=05
+night_start_hour=20
+command_name="hfl-set-mint-theme-to-match-time-of-day"
+at_job="$command_name --continuous >> ~/$command_name.log 2>&1"
+at_queue=${2:-s}
+at_error_message="\
+Command 'at' was not found. It is required for continuous mode. Install it and
+try again.
+"
+
+empty_at_queue() {
+  at -l -q "$at_queue" | awk '{ system("at -r " $1) }'
+}
+
+random() {
+  od -N4 -tu /dev/random | awk 'NR==1 {print $2} {}'
+}
+
+
+if [ $# -ne 0 ]; then
+  case $1 in
+    (--version | -V | -v) printf '%s\n' "$version_message" ; exit ;;
+    (--help | -H | -h | -\?) printf '%s\n' "$help_message" ; exit ;;
+    (--continuous) continuous=true ;;
+    (*)
+      printf '%s\n\n' "Invalid argument: \`$1\`" >& 2
+      printf '%s\n\n' "Use \`--help\` option to see all valid arguments." >& 2
+      exit $ex_usage
+    ;;
+  esac
+fi
+
+if [ ! "$(command -v gsettings)" ]; then
+  message="Command 'apt-get' was not found. Install it and try again."
+  printf '%s\n' "$message" >& 2
+  exit $ex_oserr
+fi
+
+
+hour=$(date +%H)
+
+if [ "$day_start_hour" -le "$hour" ] && [ "$hour" -lt "$night_start_hour" ]
+then
+  controls_theme=$day_controls_theme
+  window_theme=$day_window_theme
+  cursor_theme=$day_cursor_theme
+  desktop_theme=$day_desktop_theme
+  start_hour=$night_start_hour
+  prefer_dark_theme=false
+else
+  controls_theme=$night_controls_theme
+  window_theme=$night_window_theme
+  cursor_theme=$night_cursor_theme
+  desktop_theme=$night_desktop_theme
+  start_hour=$day_start_hour
+  prefer_dark_theme=true
+fi
+
+if [ "$continuous" = true ]; then
+  if [ ! "$(command -v at)" ]; then
+    printf '%s' "$at_error_message" >& 2
+    exit $ex_oserr
+  fi
+  empty_at_queue
+  echo "$at_job" | at -q "$at_queue" "$start_hour":00
+fi
+
+while true; do
+  temporary_directory="${TMPDIR:-/tmp}/$(random)"
+  if [ ! -e "$temporary_directory" ]; then
+    break
+  fi
+done
+
+exit=0; hangup=1; interrupt=2; quit=3; termination=15
+trap 'rm -f -r "$temporary_directory"' \
+  "$exit" "$hangup" "$interrupt" "$quit" "$termination"
+mkdir -p "$temporary_directory"
+mkdir -p ~/.config/gtk-3.0/
+touch ~/.config/gtk-3.0/settings.ini
+sed '/^gtk-application-prefer-dark-theme=/ d' ~/.config/gtk-3.0/settings.ini \
+  > "$temporary_directory"/settings.ini
+line="gtk-application-prefer-dark-theme=$prefer_dark_theme"
+printf '%s\n' "$line" >> "$temporary_directory"/settings.ini
+cp -f "$temporary_directory"/settings.ini ~/.config/gtk-3.0/settings.ini
+
+gsettings set org.cinnamon.desktop.interface gtk-theme "$controls_theme"
+gsettings set org.cinnamon.desktop.wm.preferences theme "$window_theme"
+gsettings set org.cinnamon.desktop.interface cursor-theme "$cursor_theme"
+gsettings set org.cinnamon.theme name "$desktop_theme"
